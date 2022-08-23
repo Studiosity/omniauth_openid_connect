@@ -284,6 +284,42 @@ module OmniAuth
         strategy.callback_phase
       end
 
+      def test_callback_phase_with_fetch_jwks
+        code = SecureRandom.hex(16)
+        state = SecureRandom.hex(16)
+        nonce = SecureRandom.hex(16)
+        jwks_json = File.read('test/fixtures/jwks.json')
+        
+        request.stubs(:params).returns('id_token' => code, 'state' => state)
+        request.stubs(:path).returns('')
+
+        strategy.options.issuer = 'example.com'
+        strategy.options.response_type = 'id_token'
+        strategy.options.fetch_jwks = true
+        strategy.options.client_options[:jwks_uri] = 'https://example.com/.jwks'
+
+        http_client = stub('OpenIDConnect::HTTPClient')
+        http_client.stubs(:get_content).with('https://example.com/.jwks').returns(jwks_json)
+        ::OpenIDConnect.stubs(:http_client).returns(http_client)
+
+        strategy.unstub(:user_info)
+        access_token = stub('OpenIDConnect::AccessToken')
+        access_token.stubs(:access_token)
+        access_token.stubs(:refresh_token)
+        access_token.stubs(:expires_in)
+        access_token.stubs(:scope)
+        access_token.stubs(:id_token).returns(File.read('test/fixtures/id_token.txt'))
+
+        id_token = stub('OpenIDConnect::ResponseObject::IdToken')
+        id_token.stubs(:raw_attributes).returns('sub' => 'sub', 'name' => 'name', 'email' => 'email')
+        id_token.stubs(:verify!).with(issuer: strategy.options.issuer, client_id: @identifier, nonce: nonce).returns(true)
+        ::OpenIDConnect::ResponseObject::IdToken.stubs(:decode).returns(id_token)
+        id_token.expects(:verify!)
+
+        strategy.call!('rack.session' => { 'omniauth.state' => state, 'omniauth.nonce' => nonce })
+        strategy.callback_phase
+      end
+
       def test_callback_phase_with_error
         state = SecureRandom.hex(16)
         nonce = SecureRandom.hex(16)

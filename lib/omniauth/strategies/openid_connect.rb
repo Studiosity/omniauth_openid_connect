@@ -14,6 +14,15 @@ module OmniAuth
       include OmniAuth::Strategy
       extend Forwardable
 
+      class JwksFetchError < StandardError
+        attr_reader :cause, :type
+
+        def initialize(cause, type)
+          @cause = cause
+          @type = type
+        end
+      end
+
       RESPONSE_TYPE_EXCEPTIONS = {
         'id_token' => { exception_class: OmniAuth::OpenIDConnect::MissingIdTokenError, key: :missing_id_token }.freeze,
         'code' => { exception_class: OmniAuth::OpenIDConnect::MissingCodeError, key: :missing_code }.freeze,
@@ -36,6 +45,7 @@ module OmniAuth
 
       option :issuer
       option :discovery, false
+      option :fetch_jwks, false # Requires also setting client_options.jwks_uri
       option :client_signing_alg
       option :client_jwk_signing_key
       option :client_x509_signing_key
@@ -133,6 +143,8 @@ module OmniAuth
         fail!(:timeout, e)
       rescue ::SocketError => e
         fail!(:failed_to_connect, e)
+      rescue JwksFetchError => e
+        fail!(e.type, e.cause)
       end
 
       def other_phase
@@ -183,6 +195,7 @@ module OmniAuth
 
       def public_key
         return config.jwks if options.discovery
+        return jwks if options.fetch_jwks
 
         key_or_secret || config.jwks
       end
@@ -286,6 +299,15 @@ module OmniAuth
         end
       end
 
+      def jwks
+        @jwks ||= ::OpenIDConnect.http_client.get_content(client_options.jwks_uri)
+        parse_jwk_key @jwks
+      rescue JSON::ParserError => e
+        raise JwksFetchError.new(e, :jwks_parse_error)
+      rescue RuntimeError => e
+        raise JwksFetchError.new(e, :jwks_fetch_error)
+      end
+
       def parse_x509_key(key)
         OpenSSL::X509::Certificate.new(key).public_key
       end
@@ -329,7 +351,12 @@ module OmniAuth
         env['omniauth.auth'] = AuthHash.new(
           provider: name,
           uid: user_data['sub'],
-          info: { name: user_data['name'], email: user_data['email'] },
+          info: {
+            name: user_data['name'],
+            email: user_data['email'],
+            first_name: user_data['given_name'],
+            last_name: user_data['family_name']
+          },
           extra: { raw_info: user_data }
         )
         call_app!
